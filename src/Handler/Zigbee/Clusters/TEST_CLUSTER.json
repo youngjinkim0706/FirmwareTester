@@ -1,0 +1,45 @@
+{
+	"id": "0xffff",
+	"name": "test_cluster",
+	"attributes": [
+		{
+			"id": "0x3",
+			"name": "test_attr1",
+			"desc": "temp",
+			"type": "0x20"
+		},
+		{
+			"id": "0x6",
+			"name": "test_attr2",
+			"desc": "temp",
+			"type": "0x20"
+		}
+	],
+	"commands": [
+		{
+			"id": "0x4",
+			"name": "test",
+			"desc": "test cmd",
+			"affected_attrs": [
+				"test_attr1",
+				"test_attr2"
+			]
+		},
+		{
+			"id": "0xff",
+			"name": "dummy",
+			"desc": "dummy cmd",
+			"affected_attrs": [
+				"test_attr1"
+			]
+		},
+		{
+			"id": "0x4f",
+			"name": "dummy49",
+			"desc": "dummy2",
+			"affected_attrs": [
+				""
+			]
+		}
+	]
+}

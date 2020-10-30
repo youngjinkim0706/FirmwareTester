@@ -1,8 +1,9 @@
 import os
 import sys
-import json
+import json     # for reading cluster configuration files
 import csv
 import datetime
+import logging
 
 import serial
 from PyQt5 import uic
@@ -13,6 +14,8 @@ from PyQt5.QtCore import *
 from WebCrawler import crawler
 from Handler.Zigbee.constants import *
 from Handler.Zigbee.zigbee_driver import ZigBeeDriver
+from Handler.Zigbee.structures import get_all_clusters, update_cluster_table,\
+                Cluster, Cmd, Attr, TaskCmd, CLUSTER_TABLE, CLUSTER_FILE_TABLE
 
 from CommandGenerator.command_generator import CmdGenerator
 
@@ -20,6 +23,10 @@ ui_file = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'ui', 'new_main.ui'))
 
 main_class = uic.loadUiType(ui_file)[0]
+
+# for debugging
+GUIlogger = logging.getLogger("GUI")
+logging.basicConfig(level=logging.DEBUG)
 
 def get_enable_ports():
     if sys.platform.startswith('win'):   
@@ -35,7 +42,32 @@ def get_enable_ports():
             result.append(port)   
         except:   
             pass   
-    return result   
+    return result
+
+# groupBox_cmd_gen 에다가 cluster를 만들어서 추가하면 될 듯
+def get_cluster_boxes():
+    """
+    Returns cluster GUI
+    """
+    cluster_box_list = []
+    y = 0
+    iter_y = 310
+    for cluster_key in CLUSTER_TABLE:
+        cluster_box = QGroupBox(cluster_key)
+        cluster_layout = QVBoxLayout()
+        cluster_box.x = 20
+        cluster_box.y = y
+        y += iter_y
+        cluster_box.width = 371
+        cluster_box.height = 221
+        # 대충 위치 높이 이런거 설정하고
+        # x = 20
+        # y를 얼마만큼 증가시켜야 하는가?
+        # width=371
+        # height=221
+        # cluster_box.setLayout()
+        cluster_box_list.append(cluster_box)
+    return cluster_box_list
 
 
 class WindowClass(QMainWindow, main_class):
@@ -46,10 +78,15 @@ class WindowClass(QMainWindow, main_class):
     
         self.set_enable_ports()
         self.pushButton_zigbee_webcrwal.clicked.connect(self.func_btn_zigbee_crwaler)
+        # TODO: add automatic routine for adding cluster comboBox
+        # cluster_box_list = get_cluster_boxes()
+        # for cluster_box in cluster_box_list:
+        #     self.groupBox_cmd_gen.addWidget(cluster_box)
         self.comboBox_level_commands.currentIndexChanged.connect(self.func_level_interface)
         self.comboBox_color_commands.currentIndexChanged.connect(self.func_color_interface)
 
-
+        self.pushButton_edit_cluster.clicked.connect(self.func_btn_edit_cluster)
+        self.pushButton_edit_cmd.clicked.connect(self.func_btn_edit_cmd)
         self.pushButton_launch_chrome.clicked.connect(self.func_btn_launch_chrome)  
         self.pushButton_cmd_gen.clicked.connect(self.func_btn_command_generator)
         self.pushButton_save_cmd.clicked.connect(self.func_btn_save_command)
@@ -70,6 +107,7 @@ class WindowClass(QMainWindow, main_class):
 
 
     def init_commands(self):
+        # TODO: automatically initialize cluster commands
         try:
             # init level commands
             level_commands = list(commands['LVL_CTRL_CLUSTER'].keys())
@@ -136,22 +174,35 @@ class WindowClass(QMainWindow, main_class):
 
         del driver
 
+    def func_btn_edit_cluster(self):
+        protocol_type = self.protocols.currentIndex()
+        if protocol_type == 0:
+            EditClusterWindow(self)
+
+    def func_btn_edit_cmd(self):
+        protocol_type = self.protocols.currentIndex()
+        EditCmdWindow(self, type=protocol_type)
+
     def func_btn_command_generator(self):
+        # FIXING
+        # commands will be a list of TaskCmd objects
+        # TODO: append commands from cluster_table
         commands = []
         
         # try:
         # on/off
         for i in range(self.spinBox_count_onoff.value()):
-            commands.append(self.cmd_generator.cmd_onoff(on=self.radioButton_on.isChecked(), off=self.radioButton_off.isChecked(), toggle=self.radioButton_toggle.isChecked()))
+            cmds = self.cmd_generator.cmd_onoff(on=self.radioButton_on.isChecked(), off=self.radioButton_off.isChecked(), toggle=self.radioButton_toggle.isChecked())
+            commands.append(cmds)
 
         # level
         for i in range(self.spinBox_count_level.value()):
-            cmds = self.cmd_generator.cmd_level_inteface(self.comboBox_level_commands.currentText(), self.vlayout_level_widget.children())
+            cmds = self.cmd_generator.cmd_level_interface(self.comboBox_level_commands.currentText(), self.vlayout_level_widget.children())
             commands.append(cmds)
 
         # color
         for i in range(self.spinBox_count_color.value()):
-            cmds = self.cmd_generator.cmd_color_inteface(self.comboBox_color_commands.currentText(), self.vlayout_color_widget.children())
+            cmds = self.cmd_generator.cmd_color_interface(self.comboBox_color_commands.currentText(), self.vlayout_color_widget.children())
             commands.append(cmds)
 
         
@@ -160,11 +211,6 @@ class WindowClass(QMainWindow, main_class):
             for command in commands:
                 self.list_gen_cmd.addItem(json.dumps(command))
 
-        # except Exception:
-        #     print(str(Exception))
-        
-        # finally:
-        #     self.func_level_interface()
 
     def func_btn_save_command(self):
         file_name = QFileDialog.getSaveFileName(self, 'Save file', '', 'JSON (*.json)')
@@ -213,10 +259,39 @@ class WindowClass(QMainWindow, main_class):
         # except:
         #    pass # put error messages here
 
+    # flexible layout function
+    def func_overall_interface(self):
+        # @hipiphock
+        # TODO: think of commands such as STOP.
+        # first, get cluster key.
+        cluster_key = "tempkey"
+        # then, get command key.
+        command_key = "tempkey"
+        # Cluster will be the 
+        cluster = CLUSTER_TABLE[cluster_key]
+        hlayout = []
+        for attr_key in cluster.cmd_table[command_key].affected_attrs:
+            attr_desc = cluster.attr_table[attr_key].desc
+            attr_type = cluster.attr_table[attr_key].type
+            temp_layout = QHBoxLayout()
+            temp_label = QLabel(attr_desc)
+            # get appropriate input box according to attr_type
+            input_layout = None
+            if attr_type == 0x20:
+                input_layout = QSpinBox()
+            elif attr_type == 0x30:
+                pass
+            # for random value
+            hlayout_random = self.func_layout_random()
+            hlayout.append(hlayout_random)
+        for element in hlayout:
+            self.vlayout_level_widget.addLayout(element) 
+
+
     def func_level_interface(self):
         try:
             current_cmd = self.comboBox_level_commands.currentText()
-            self.clear_layout(self.vlayout_level_widget)
+            self.clear_layout(self.vlayout_level_widget)                                
 
             if commands['LVL_CTRL_CLUSTER'][current_cmd] == LVL_CTRL_MV_TO_LVL_CMD or commands['LEVEL'][current_cmd] == LVL_CTRL_MV_TO_LVL_ONOFF_CMD:
                 hlayout_brightness = QHBoxLayout()
@@ -338,7 +413,6 @@ class WindowClass(QMainWindow, main_class):
 
         else:
             cmds = []
-        
             for i in range(self.list_gen_cmd.count()):
                 cmds.append(json.loads(self.list_gen_cmd.item(i).text()))
             self.worker = Worker(connection_meta, cmds, parent=self)
@@ -492,6 +566,10 @@ class Worker(QThread):
         self.driver = ZigBeeDriver(self.port, self.channel, self.zigbee_id)
 
     def run(self): # communicate to zigbee driver class
+        # TODO: make new routine for new structure
+        # for task_cmd in self.commands:
+        #     pass
+        # Original code
         for command in self.commands:
             currents = []
             prevs = []
@@ -533,6 +611,7 @@ class Worker(QThread):
 
 
     def create_attribute(self, command, isRemain=False):
+        # just get attribute from pre-defined command - attribute
         cluster = clusters[command['cluster']]
         cmd = commands[command['cluster']][command['command']]
 
@@ -569,8 +648,9 @@ class Worker(QThread):
                     attr_name = "Color Y"
                     attribute_id, attribute_type = attributes['COLOR_CTRL_CURR_Y_ATTR']
                     attrs.append(Attribute(cluster=cluster, id=attribute_id, type=attribute_type, name=attr_name))
-            
-            return attrs
+
+            # @hipiphock
+            # attrs = command.attr_list
 
     def stop(self):
         del self
@@ -582,6 +662,16 @@ class Validator():
         self.cmd = cmd
         self.previous = previous
         self.current = current
+
+    def new_validate_attribute(self):
+        # TODO: fix Validator
+        """
+        new_validate_attribute function validates attributes
+        based on cmd.affected_attrs lists.
+        """
+        # self.cmd가 TaskCmd라고 가정하고 구현하자.
+        
+        pass
 
     def vaildate_attribute(self):
         cluster = clusters[self.cmd['cluster']]
@@ -617,6 +707,7 @@ class Validator():
             return self.formatter(False, expected)
 
     def formatter(self, isValid, expected):
+        # TODO: fix formatter to appropriate one
         print(self.cmd)
         try:
             result = "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
@@ -635,7 +726,362 @@ class Validator():
                 )
         finally:
             return result
+
+# Cluster, commands
+# CLUSTER_TABLE과 CLUSTER_FILE_TABLE들을 이용해서 cluster들을 관리한다.
+# 새로운 cluster가 생성되면 이를 CLUSTER_TABLE에다가 넣는다.
+# attr이나 cmd를 읽거나 써올 때에는 tas
+
+# 명령 바꾸는 애들
+class EditCmdWindow(QMainWindow):
+    def __init__(self, parent, type):
+        super(EditCmdWindow, self).__init__(parent)
+        edit_ui = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'ui', 'edit_cmd_window.ui'))
+        uic.loadUi(edit_ui, self)
+        # TODO: CLUSTER_TABLE의 주기적인 업데이트, 그 이후에 get_all_cluster call을 CLUSTER_TABLE로 변경
+        update_cluster_table()
+        for cluster_key in CLUSTER_TABLE.keys():
+            self.comboBox_cluster.addItem(cluster_key)
+        self.comboBox_cluster.currentIndexChanged.connect(self.func_cluster_changed)
+
+        if type == 0: #zigbee
+            self.groupBox_1.setTitle("command 수정")
+            self.groupBox_2.setTitle("attribute 수정")
+            self.pushButton_save.clicked.connect(self.func_btn_edit_zigbee)
+
+            self.tableWidget_g1.setSelectionMode(QAbstractItemView.SingleSelection)
+            self.tableWidget_g1.setColumnCount(4)
+            self.tableWidget_g1.setRowCount(0)  # 파일에 있는 특정 cluster의 command 만큼
+            self.tableWidget_g1.setHorizontalHeaderLabels(["command id", "command name", "command desc", "affected_attrs"])
+
+            self.tableWidget_g2.setSelectionMode(QAbstractItemView.SingleSelection)
+            self.tableWidget_g2.setColumnCount(3)
+            self.tableWidget_g2.setRowCount(0) # 파일에 있는 특정 cluster의 attribute 만큼
+            self.tableWidget_g2.setHorizontalHeaderLabels(["attribute id", "attribute name", "attribute type"])
+            self.func_cluster_changed()
+        else: #ble
+            # TODO: make automated routine for fetching service files
+            self.groupBox_1.setTitle("service 수정")
+            self.groupBox_2.setTitle("characteristic 수정")
+            self.pushButton_save.clicked.connect(self.func_btn_save_ble)
+
+        self.pushButton_delete_g1.clicked.connect(self.func_delete_row_command)
+        self.pushButton_add_g1.clicked.connect(self.func_add_command)
+        self.pushButton_delete_g2.clicked.connect(self.func_delete_row_attribute)
+        self.pushButton_add_g2.clicked.connect(self.func_add_attribute)
+        self.pushButton_cancel.clicked.connect(self.func_btn_cancel)
+        self.show()
+
+    def func_cluster_changed(self):
+        """
+        CLUSTER_TABEL에 저장된 정보를 기반으로 cluster 정보를 읽어들인다.
+        """
+        self.tableWidget_g1.setRowCount(0)
+        self.tableWidget_g2.setRowCount(0)
+        cluster_key = self.comboBox_cluster.currentText()
+        # update_cluster_table()
+        cluster = CLUSTER_TABLE[cluster_key]
+        attributes = cluster.attr_table
+        commands = cluster.cmd_table
+        self.tableWidget_g1.setRowCount(len(commands))
+        self.tableWidget_g2.setRowCount(len(attributes))
+        cnt = 0
+        for cmd_key in commands.keys():
+            command = commands[cmd_key]
+            self.tableWidget_g1.setItem(cnt, 0, QTableWidgetItem(str(hex(command.id))))
+            self.tableWidget_g1.setItem(cnt, 1, QTableWidgetItem(command.name))
+            self.tableWidget_g1.setItem(cnt, 2, QTableWidgetItem(command.desc))
+            attr_str = str()
+            for attr in command.affected_attrs:
+                attr_str += attr
+                attr_str += ','
+            self.tableWidget_g1.setItem(cnt, 3, QTableWidgetItem(attr_str))
+            cnt += 1
+        cnt = 0
+        for attr_key in attributes.keys():
+            attribute = attributes[attr_key]
+            self.tableWidget_g2.setItem(cnt, 0, QTableWidgetItem(str(hex(attribute.id))))
+            self.tableWidget_g2.setItem(cnt, 1, QTableWidgetItem(str(attribute.name)))
+            self.tableWidget_g2.setItem(cnt, 2, QTableWidgetItem(str(hex(attribute.type))))
+            # type??
+            cnt += 1
+#         GUIlogger.debug("func_cluster_changed called.")
+#         # @hipiphock
+#         # clear table
+#         while self.tableWidget_g1.rowCount() > 0:
+#             self.tableWidget_g1.removeRow(0)
+#         while self.tableWidget_g2.rowCount() > 0:
+#             self.tableWidget_g2.removeRow(0)
+
+#         cluster_key = self.comboBox_cluster.currentText()
+#         cluster = CLUSTER_TABLE[cluster_key]
+#         for cmd_key in cluster.cmd_table:
+#             new_row_cnt = self.tableWidget_g1.rowCount() + 1
+#             self.tableWidget_g1.setRowCount(new_row_cnt)
+#             # id, name, desc, attr
+#             cmd = cluster.cmd_table[cmd_key]
+#             self.tableWidget_g1.setItem(new_row_cnt - 1, 0, QTableWidgetItem(str(hex(cmd.id))))
+#             self.tableWidget_g1.setItem(new_row_cnt - 1, 1, QTableWidgetItem(cmd.name))
+#             self.tableWidget_g1.setItem(new_row_cnt - 1, 2, QTableWidgetItem(cmd.desc))
+#             attr_str = str()
+#             for attr in cmd.affected_attrs:
+#                 attr_str += attr
+#                 attr_str += ','
+#             self.tableWidget_g1.setItem(new_row_cnt - 1, 3, QTableWidgetItem(attr_str))
+#         for attr_key in cluster.attr_table:
+#             new_row_cnt = self.tableWidget_g2.rowCount() + 1
+#             self.tableWidget_g2.setRowCount(new_row_cnt)
+#             # id, name, type
+#             attr = cluster.attr_table[attr_key]
+#             self.tableWidget_g2.setItem(new_row_cnt - 1, 0, QTableWidgetItem(str(hex(attr.id))))
+#             self.tableWidget_g2.setItem(new_row_cnt - 1, 1, QTableWidgetItem(attr.name))
+#             self.tableWidget_g2.setItem(new_row_cnt - 1, 2, QTableWidgetItem(str(hex(attr.type))))
         
+
+    def func_add_command(self, type):
+        cluster_key = self.comboBox_cluster.currentText()
+        if type==0: #zigbee
+            input_dialog = InputZigbeeDialog(self, 1)
+            input_dialog.exec_()
+            cmd_id = input_dialog.cmd_id
+            cmd_name = input_dialog.cmd_name
+            cmd_desc = input_dialog.cmd_desc
+            affected_attr_str = input_dialog.cmd_affected_attrs
+            cmd_affected_attrs = None
+            if affected_attr_str != None:
+                cmd_affected_attrs = affected_attr_str.split(',')
+            new_cmd = Cmd(int(cmd_id, 16), cmd_name, cmd_desc, cmd_affected_attrs)
+            CLUSTER_TABLE[cluster_key].cmd_table[cmd_name] = new_cmd
+            if cmd_id != "" and cmd_desc != "":
+                new_row_cnt = self.tableWidget_g1.rowCount() + 1
+                self.tableWidget_g1.setRowCount(new_row_cnt)
+                self.tableWidget_g1.setItem(new_row_cnt-1,0,QTableWidgetItem(cmd_id))
+                self.tableWidget_g1.setItem(new_row_cnt-1,1,QTableWidgetItem(cmd_name))
+                self.tableWidget_g1.setItem(new_row_cnt-1,2,QTableWidgetItem(cmd_desc))
+                self.tableWidget_g1.setItem(new_row_cnt-1,3,QTableWidgetItem(affected_attr_str))
+                self.tableWidget_g1.resizeRowsToContents()
+        else: #ble
+            input_dialog = InputBLEDialog(self,1)
+
+    def func_add_attribute(self, type):
+        cluster_key = self.comboBox_cluster.currentText()
+        if type==0: #zigbee
+            input_dialog = InputZigbeeDialog(self, 2)
+            input_dialog.exec_()
+            attr_id = input_dialog.attr_id
+            attr_name = input_dialog.attr_name
+            attr_desc = "temp"  # TODO: fix desc
+            attr_type = input_dialog.attr_type
+            new_attr = Attr(int(attr_id, 16), attr_name, attr_desc, int(attr_type, 16))
+            CLUSTER_TABLE[cluster_key].attr_table[attr_name] = new_attr
+            if attr_id is not None and attr_name is not None and attr_type is not None and attr_id !="" and attr_name != "" and attr_type !="":
+                new_row_cnt = self.tableWidget_g2.rowCount() + 1
+                self.tableWidget_g2.setRowCount(new_row_cnt)
+                self.tableWidget_g2.setItem(new_row_cnt-1,0,QTableWidgetItem(attr_id))
+                self.tableWidget_g2.setItem(new_row_cnt-1,1,QTableWidgetItem(attr_name))
+                self.tableWidget_g2.setItem(new_row_cnt-1,2,QTableWidgetItem(attr_type))
+        else: #ble
+            input_dialog = InputBLEDialog(self,2)
+    
+    def func_delete_row_command(self):
+        cluster_key = self.comboBox_cluster.currentText()
+        row = self.tableWidget_g1.currentRow()
+        cmd_key = self.tableWidget_g1.item(row, 1).text()
+        del CLUSTER_TABLE[cluster_key].cmd_table[cmd_key]
+        self.tableWidget_g1.removeRow(row)
+    
+    def func_delete_row_attribute(self):
+        cluster_key = self.comboBox_cluster.currentText()
+        row = self.tableWidget_g2.currentRow()
+        attr_key = self.tableWidget_g2.item(row, 1).text()
+        del CLUSTER_TABLE[cluster_key].attr_table[attr_key]
+        self.tableWidget_g2.removeRow(row)
+
+    def func_btn_edit_zigbee(self):
+        """
+        CLUSTER_TABLE을 저장한다.
+        """
+        for cluster_key in CLUSTER_TABLE:
+            cluster = CLUSTER_TABLE[cluster_key]
+            cluster.writeClusterFile(CLUSTER_FILE_TABLE[cluster_key])
+        self.close()
+    
+    def func_btn_save_ble(self):
+        # TODO: implement
+        self.close()
+
+    def func_btn_cancel(self):
+        self.close()
+
+class EditClusterWindow(QMainWindow):
+    def __init__(self, parent):
+        super(EditClusterWindow, self).__init__(parent)
+
+        input_ui = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'ui', 'edit_cluster_window.ui'))
+        uic.loadUi(input_ui, self)
+        self.listWidget.itemDoubleClicked.connect(self.func_btn_delete)
+        update_cluster_table()
+        for cluster_key in CLUSTER_TABLE.keys():
+            self.listWidget.addItem(QListWidgetItem(cluster_key))
+        self.pushButton_add.clicked.connect(self.func_btn_add)
+        self.pushButton_cancel.clicked.connect(self.func_btn_cancel)
+        self.pushButton_delete.clicked.connect(self.func_btn_delete)
+        self.show()
+    
+    def func_btn_add(self):
+        """
+        새로운 cluster를 만든다.
+        problem: 새로운 cluster file을 만든 후 파일로 언제 저장할까?
+        """
+        input_dialog = InputClusterDialog(self)
+        input_dialog.exec_()
+        cluster_id = input_dialog.cluster_id
+        cluster_name = input_dialog.cluster_name
+        if cluster_id is not None and cluster_name is not None and cluster_id != "" and cluster_name != "":
+            # update new cluster to CLUSTER_TABLE
+            new_cluster = Cluster(cluster_id, cluster_name)
+            CLUSTER_TABLE[cluster_name] = new_cluster
+            # update new cluster's filepath to CLUSTER_FILE_TABLE
+            cluster_path = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), '..', 'src', 'Handler', 'Zigbee', 'Clusters'))
+            upper_name = cluster_name.upper()
+            filename = os.path.join(cluster_path, upper_name+".json")
+            new_cluster.writeClusterFile(filename)
+            CLUSTER_FILE_TABLE[cluster_name] = filename
+            self.listWidget.addItem(QListWidgetItem(cluster_name))
+
+    def func_btn_delete(self):
+        """
+        cluster를 지운다.
+        problem: cluster file을 언제 지울 것인가?
+        """
+        seleted = self.listWidget.currentItem().text() +".json"
+        delete_filename =os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'src', 'Handler', 'Zigbee', 'Clusters', seleted))
+        if os.path.isfile(delete_filename):
+            os.remove(delete_filename)
+            self.listWidget.takeItem(self.listWidget.currentRow())
+
+    
+    def func_btn_cancel(self):
+        self.close()
+# =======
+#     # @hipiphock
+#     def func_btn_edit_zigbee(self):
+#         # 그냥 바로 CLUSTER_TABLE을 저장하는 식으로 바꾼다.
+#         for cluster_key in CLUSTER_TABLE:
+#             cluster = CLUSTER_TABLE[cluster_key]
+#             cluster.writeClusterFile(CLUSTER_FILE_TABLE[cluster_key])
+#         self.close()
+    
+#     def func_btn_save_ble(self):
+#         # TODO: implement save ble
+#        self.close()
+# >>>>>>> master
+
+
+class InputClusterDialog(QDialog):
+    def __init__(self, parent):
+        super(InputClusterDialog, self).__init__(parent)
+        self.cluster_id = None
+        self.cluster_name = None
+
+        input_ui = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'ui', 'input_cluster_dialog.ui'))
+        uic.loadUi(input_ui, self)
+        self.setAutoFillBackground(True)
+        self.pushButton_save.clicked.connect(self.func_btn_save)
+        self.pushButton_cancel.clicked.connect(self.func_btn_cancel)
+        self.show()
+    
+    def func_btn_save(self):
+        self.cluster_name = self.lineEdit_cluster_name.text()
+        self.cluster_id = self.lineEdit_cluster_id.text()
+        self.cluster_name = self.lineEdit_cluster_name.text()
+        self.close()
+    
+    def func_btn_cancel(self):
+        self.close()
+
+class InputZigbeeDialog(QDialog):
+    def __init__(self, parent, choice):
+        super(InputZigbeeDialog, self).__init__(parent)
+        self.choice = choice
+        self.cmd_id = None
+        self.cmd_name = None
+        self.cmd_desc = None
+        self.cmd_affected_attrs = None
+        self.attr_id = None
+        self.attr_name = None
+        self.attr_type = None
+
+        input_ui = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'ui', 'input_zigbee_dialog.ui'))
+        uic.loadUi(input_ui, self)
+        self.setAutoFillBackground(True)
+        if choice == 1:
+            self.groupBox_attr.setEnabled(False)
+            self.groupBox_cmd.setEnabled(True)
+        else:
+            self.groupBox_attr.setEnabled(True)
+            self.groupBox_cmd.setEnabled(False)
+        self.pushButton_add.clicked.connect(self.func_btn_add)
+        self.pushButton_cancel.clicked.connect(self.func_btn_cancel)
+        self.show()
+    
+    def func_btn_add(self):
+        if self.choice == 1:
+            self.cmd_id = self.lineEdit_cmd_id.text()
+            self.cmd_name = self.lineEdit_cmd_name.text()
+            self.cmd_desc = self.lineEdit_cmd_desc.text()
+            self.cmd_affected_attrs = self.lineEdit_cmd_affected_attrs.text()
+        else:
+            self.attr_id = self.lineEdit_attr_id.text()
+            self.attr_name = self.lineEdit_attr_name.text()
+            self.attr_type = self.lineEdit_attr_type.text()
+        self.close()
+    
+    def func_btn_cancel(self):
+        self.close()
+
+class InputBLEDialog(QDialog):
+    def __init__(self, parent, choice):
+        super(InputBLEDialog, self).__init__(parent)
+        self.choice = choice
+        self.service_id = None
+        self.service_desc = None
+        self.attr_id = None
+        self.attr_name = None
+        self.attr_type = None
+
+        input_ui = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'ui', 'input_ble_dialog.ui'))
+        uic.loadUi(input_ui, self)
+        self.setAutoFillBackground(True)
+        if choice == 1:
+            self.groupBox_attr.setEnabled(False)
+            self.groupBox_service.setEnabled(True)
+        else:
+            self.groupBox_attr.setEnabled(True)
+            self.groupBox_service.setEnabled(False)
+        self.pushButton_add.clicked.connect(self.func_btn_add)
+        self.pushButton_cancel.clicked.connect(self.func_btn_cancel)
+        self.show()
+    
+    def func_btn_add(self):
+        if self.choice == 1:
+            self.service_id = str(self.lineEdit_service_id.text())
+            self.service_desc = str(self.lineEdit_service_desc.text())
+        else:
+            self.attr_id = self.lineEdit_attr_id.text()
+            self.attr_name = self.lineEdit_attr_name.text()
+            self.attr_type = self.lineEdit_attr_type.text()
+        self.close()
+    
+    def func_btn_cancel(self):
+        self.close()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
